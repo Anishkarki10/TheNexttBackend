@@ -60,22 +60,36 @@ def create_order():
     if errors:
         return jsonify({"errors": errors}), 400
 
-    order_items = []
-    subtotal = 0
+    if not isinstance(items, list) or not all(isinstance(i, dict) for i in items):
+        return jsonify({"error": "'items' must be a list of {variant_id, quantity}"}), 400
     for raw_item in items:
         variant_id = raw_item.get("variant_id")
         quantity = raw_item.get("quantity")
-        if not isinstance(quantity, int) or quantity < 1:
+        # bool is a subclass of int in Python - reject `true` as a quantity.
+        if not isinstance(variant_id, int) or isinstance(variant_id, bool):
+            return jsonify({"error": f"Invalid variant_id {variant_id!r}"}), 400
+        if not isinstance(quantity, int) or isinstance(quantity, bool) or quantity < 1:
             return jsonify({"error": f"Invalid quantity for variant {variant_id}"}), 400
+
+    order_items = []
+    subtotal = 0
+    # Lock variants in a consistent (id) order, so two concurrent checkouts
+    # with the same products in a different cart order can't deadlock.
+    for raw_item in sorted(items, key=lambda i: i["variant_id"]):
+        variant_id = raw_item["variant_id"]
+        quantity = raw_item["quantity"]
 
         # Row lock until commit: on Postgres two concurrent checkouts could
         # otherwise both read the same stock_qty and oversell the last units.
         variant = db.session.get(ProductVariant, variant_id, with_for_update=True)
-        if not variant:
+        if not variant or not variant.product.is_available:
+            db.session.rollback()
             return jsonify({"error": f"Variant {variant_id} not found"}), 404
         if variant.is_enquiry_only or variant.price_npr is None:
+            db.session.rollback()
             return jsonify({"error": f"'{variant.label}' is enquiry-only and cannot be checked out online"}), 400
         if variant.stock_qty < quantity:
+            db.session.rollback()
             return jsonify({"error": f"Not enough stock for '{variant.label}' (have {variant.stock_qty})"}), 409
 
         # Prices always come from the server-side variant record, never the client.

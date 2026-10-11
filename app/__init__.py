@@ -1,7 +1,9 @@
 import os
 
 from dotenv import load_dotenv
-from flask import Flask
+from flask import Flask, jsonify, request
+from werkzeug.exceptions import HTTPException
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 from app.config import Config
 from app.extensions import cors, db, jwt, limiter, migrate
@@ -33,6 +35,15 @@ def create_app(config_class: type = Config) -> Flask:
     app.config.from_object(config_class)
 
     _refuse_insecure_production_secrets(app)
+
+    proxy_count = app.config["TRUSTED_PROXY_COUNT"]
+    if proxy_count:
+        # Behind nginx every request arrives from the proxy's own address, so
+        # without this the rate limiter (keyed on remote_addr) would put all
+        # visitors in one shared bucket - e.g. 5 failed logins from anyone
+        # would lock out the real admin. Only the last `proxy_count`
+        # X-Forwarded-For hops are trusted, so clients can't spoof their IP.
+        app.wsgi_app = ProxyFix(app.wsgi_app, x_for=proxy_count, x_proto=proxy_count, x_host=proxy_count)
 
     os.makedirs(app.instance_path, exist_ok=True)
     os.makedirs(app.config["UPLOAD_FOLDER"], exist_ok=True)
@@ -84,6 +95,20 @@ def create_app(config_class: type = Config) -> Flask:
     app.register_blueprint(admin_dashboard.bp)
     app.register_blueprint(admin_enquiries.bp)
     app.register_blueprint(admin_audit_log.bp)
+
+    @app.errorhandler(HTTPException)
+    def _http_error_as_json(exc: HTTPException):
+        # The frontends read `body.error`; Flask's defaults (404, 405, 413,
+        # 429 from the rate limiter...) are HTML pages they can't parse.
+        if exc.code == 429:
+            return jsonify({"error": "Too many requests - please wait a minute and try again."}), 429
+        return jsonify({"error": exc.description}), exc.code
+
+    @app.errorhandler(Exception)
+    def _unhandled_error_as_json(exc: Exception):
+        db.session.rollback()
+        app.logger.exception("Unhandled error on %s %s", request.method, request.path)
+        return jsonify({"error": "Internal server error"}), 500
 
     from app import cli
 

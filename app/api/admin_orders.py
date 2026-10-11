@@ -4,6 +4,7 @@ from flask_jwt_extended import jwt_required
 from app.extensions import db
 from app.models import Order, OrderStatus, PaymentStatus
 from app.services.audit import log_admin_action
+from app.services.order_maintenance import restore_stock
 
 bp = Blueprint("admin_orders", __name__, url_prefix="/api/admin/orders")
 
@@ -22,7 +23,7 @@ def list_orders():
         except ValueError:
             return jsonify({"error": f"Invalid status '{status}'"}), 400
 
-    page = max(int(request.args.get("page", 1)), 1)
+    page = max(request.args.get("page", 1, type=int), 1)
     pagination = query.paginate(page=page, per_page=PAGE_SIZE, error_out=False)
 
     return jsonify(
@@ -45,7 +46,7 @@ def get_order(order_id):
 @bp.patch("/<int:order_id>/status")
 @jwt_required()
 def update_status(order_id):
-    order = Order.query.get_or_404(order_id)
+    order = Order.query.with_for_update().filter_by(id=order_id).first_or_404()
     body = request.get_json(silent=True) or {}
     changes = {}
 
@@ -54,6 +55,11 @@ def update_status(order_id):
             new_status = OrderStatus(body["status"])
         except (ValueError, TypeError):
             return jsonify({"error": f"Invalid status '{body['status']}'", "valid": [s.value for s in OrderStatus]}), 400
+        if order.status == OrderStatus.cancelled and new_status != OrderStatus.cancelled:
+            # Its stock was already returned on cancel, and may have been sold since.
+            return jsonify({"error": "A cancelled order can't be reopened - place a new order instead."}), 409
+        if new_status == OrderStatus.cancelled and order.status != OrderStatus.cancelled:
+            restore_stock(order)
         changes["status"] = {"from": order.status.value, "to": new_status.value}
         order.status = new_status
 

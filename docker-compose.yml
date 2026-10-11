@@ -21,29 +21,17 @@ services:
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
       UPLOAD_FOLDER: /app/uploads
+    # Bound to localhost only - nginx on the host is the public entry point.
+    # (Docker-published ports bypass ufw, so 0.0.0.0 here would expose
+    # gunicorn directly to the internet.)
+    ports:
+      - "127.0.0.1:5000:5000"
     volumes:
       - uploads:/app/uploads
     depends_on:
       db:
         condition: service_healthy
 
-  caddy:
-    image: caddy:2-alpine
-    restart: unless-stopped
-    ports:
-      - "80:80"
-      - "443:443"
-    environment:
-      API_DOMAIN: ${API_DOMAIN}
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy_data:/data
-      - caddy_config:/config
-    depends_on:
-      - api
-
 volumes:
   pgdata:
   uploads:
-  caddy_data:
-  caddy_config:

@@ -13,7 +13,7 @@ PAGE_SIZE = 50
 def list_audit_log():
     query = AdminAuditLog.query.order_by(AdminAuditLog.created_at.desc())
 
-    page = max(int(request.args.get("page", 1)), 1)
+    page = max(request.args.get("page", 1, type=int), 1)
     pagination = query.paginate(page=page, per_page=PAGE_SIZE, error_out=False)
 
     return jsonify(

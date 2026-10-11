@@ -26,6 +26,12 @@ class Config:
     # attacker forge a valid admin auth token if left unchanged.
     SECRET_KEY = os.environ.get("SECRET_KEY", "dev-secret-key-change-me")
     JWT_SECRET_KEY = os.environ.get("JWT_SECRET_KEY", "dev-jwt-secret-key-change-me")
+    # Admin session length in seconds (Flask-JWT-Extended's default is 15 min).
+    JWT_ACCESS_TOKEN_EXPIRES = int(os.environ.get("JWT_ACCESS_TOKEN_EXPIRES", "900"))
+
+    # Number of reverse proxies in front of the app (nginx = 1; nginx behind
+    # Cloudflare's orange-cloud proxy = 2). 0 when running without a proxy.
+    TRUSTED_PROXY_COUNT = int(os.environ.get("TRUSTED_PROXY_COUNT", "0"))
 
     # Rate-limit storage: in-memory by default (fine for a single process /
     # local dev). A production deployment running multiple worker processes

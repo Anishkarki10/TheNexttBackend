@@ -22,7 +22,7 @@ def list_enquiries():
         except ValueError:
             return jsonify({"error": f"Invalid status '{status}'"}), 400
 
-    page = max(int(request.args.get("page", 1)), 1)
+    page = max(request.args.get("page", 1, type=int), 1)
     pagination = query.paginate(page=page, per_page=PAGE_SIZE, error_out=False)
 
     return jsonify(

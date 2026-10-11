@@ -21,22 +21,35 @@ from app.models import Order, OrderStatus, PaymentStatus, ProductVariant
 STALE_ORDER_MINUTES = 30
 
 
+def restore_stock(order: Order) -> None:
+    """Returns an order's reserved units to stock. Uses an in-SQL increment
+    (stock_qty = stock_qty + n) rather than read-modify-write in Python, so
+    it can't lose a concurrent checkout's decrement of the same variant."""
+    for item in order.items:
+        if item.variant_id:
+            ProductVariant.query.filter_by(id=item.variant_id).update(
+                {ProductVariant.stock_qty: ProductVariant.stock_qty + item.quantity}
+            )
+
+
 def release_stale_pending_orders() -> int:
     # created_at is stored as a naive UTC datetime (db.func.now() on SQLite
     # has no tzinfo) - compare against a naive UTC "now" to match, rather
     # than the deprecated datetime.utcnow().
     cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(minutes=STALE_ORDER_MINUTES)
-    stale_orders = Order.query.filter(
-        Order.status == OrderStatus.pending_payment,
-        Order.created_at < cutoff,
-    ).all()
+    # Lock the rows (skipping ones another request is already releasing) so
+    # two concurrent requests can't both restore the same order's stock.
+    stale_orders = (
+        Order.query.filter(
+            Order.status == OrderStatus.pending_payment,
+            Order.created_at < cutoff,
+        )
+        .with_for_update(skip_locked=True)
+        .all()
+    )
 
     for order in stale_orders:
-        for item in order.items:
-            if item.variant_id:
-                variant = ProductVariant.query.get(item.variant_id)
-                if variant:
-                    variant.stock_qty += item.quantity
+        restore_stock(order)
         order.status = OrderStatus.cancelled
         if order.payment_status == PaymentStatus.unpaid:
             order.payment_status = PaymentStatus.failed

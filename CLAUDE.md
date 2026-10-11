@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Flask API backend for "The Next Protein" (TNP), a small e-commerce store in Nepal (prices are NPR). It serves the public storefront and the admin panel. Both frontends live in separate repos and are hosted on Vercel; their origins must be listed in `CORS_ORIGINS`.
 
-Production runs on a Contabo VPS with `docker compose`: Postgres (`db`), gunicorn (`api`), and Caddy, which provides automatic HTTPS for `API_DOMAIN` (`Caddyfile`). `docker-entrypoint.sh` runs `flask db upgrade` and `seed-admin` on every container start. Server settings go in `.env` (see `.env.example`).
+Production runs on a Contabo VPS. Two containers run under `docker compose`: Postgres (`db`) and gunicorn (`api`, published only on `127.0.0.1:5000`). nginx is installed on the host and handles HTTPS through certbot (`deploy/nginx.conf`). `docker-entrypoint.sh` runs `flask db upgrade` and `seed-admin` on every container start. Server settings go in `.env` (see `.env.example`). The full server walkthrough, including backups (`deploy/backup.sh`), is in `deploy/README.md`.
 
 There is no test suite and no linter/formatter config in the repo.
 
@@ -33,7 +33,7 @@ docker compose exec db psql -U "$POSTGRES_USER" "$POSTGRES_DB"
 
 ## Architecture
 
-**App factory**: `app/__init__.py::create_app` sets up the extensions from `app/extensions.py` (SQLAlchemy, Migrate, JWT, CORS limited to `/api/*`, and Limiter with a default of 200/min, stored in memory unless `RATELIMIT_STORAGE_URI` is set). It also registers every blueprint and adds the security headers. If `APP_ENV=production` and `SECRET_KEY`/`JWT_SECRET_KEY` still hold their dev defaults, it refuses to boot. All configuration comes from env vars in `app/config.py`. `DATABASE_URL` is rewritten to the `postgresql+psycopg://` driver (psycopg 3), and SQLite is the fallback when it's unset. Gunicorn runs a single worker with threads because rate limits are kept in memory per process.
+**App factory**: `app/__init__.py::create_app` sets up the extensions from `app/extensions.py` (SQLAlchemy, Migrate, JWT, CORS limited to `/api/*`, and Limiter with a default of 200/min, stored in memory unless `RATELIMIT_STORAGE_URI` is set). It also registers every blueprint and adds the security headers. If `APP_ENV=production` and `SECRET_KEY`/`JWT_SECRET_KEY` still hold their dev defaults, it refuses to boot. All configuration comes from env vars in `app/config.py`. `DATABASE_URL` is rewritten to the `postgresql+psycopg://` driver (psycopg 3), and SQLite is the fallback when it's unset. Gunicorn runs a single worker with threads because rate limits are kept in memory per process. `TRUSTED_PROXY_COUNT` (1 behind nginx) turns on ProxyFix, so the rate limiter sees real client IPs instead of nginx's address. Every error, including 404, 429 and unhandled 500s, is returned as JSON `{"error": ...}`, because the frontends read `body.error`.
 
 **Blueprints** (`app/api/`): each one defines its own `url_prefix`.
 - Public endpoints: `products`, `orders`, `payments`, `enquiries` under `/api/...`.
@@ -47,6 +47,7 @@ docker compose exec db psql -U "$POSTGRES_USER" "$POSTGRES_DB"
 - COD orders go straight to `processing`. Online-payment orders start in `pending_payment`.
 - No cron or task queue exists. Instead, `services/order_maintenance.py::release_stale_pending_orders()` runs at the start of stock-sensitive endpoints (order creation, payment initiation). It cancels `pending_payment` orders older than 30 minutes and gives their stock back. Call it from any new endpoint that depends on stock.
 - `ENABLED_PAYMENT_METHODS` (env, default `cod`) is the only switch for payment methods. Order creation checks it, and so does each payment `initiate` endpoint. eSewa (`services/esewa.py`) and Stripe (`services/stripe_gateway.py`) are fully built but turned off. Their callback endpoints verify the payment with the gateway and are idempotent (`_mark_paid` never downgrades an order that's already paid).
+- Stock goes back with `order_maintenance.py::restore_stock()`, which uses an in-SQL increment. This happens on stale-order release and when an admin cancels an order. Cancelled orders can't be reopened. Checkout locks variants sorted by id to avoid deadlocks.
 - Public order lookup (`GET /api/orders/<number>`) requires `?phone=` to match the order's phone number.
 
 **Datetimes**: the database stores naive UTC (`db.func.now()`). Serialize with `app/utils.py::to_utc_iso` (appends `Z`), and compare against `datetime.now(timezone.utc).replace(tzinfo=None)`. Order numbers (`TNP-YYYYMMDD-XXXXXX`) use the Asia/Kathmandu date.

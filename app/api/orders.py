@@ -68,7 +68,9 @@ def create_order():
         if not isinstance(quantity, int) or quantity < 1:
             return jsonify({"error": f"Invalid quantity for variant {variant_id}"}), 400
 
-        variant = ProductVariant.query.get(variant_id)
+        # Row lock until commit: on Postgres two concurrent checkouts could
+        # otherwise both read the same stock_qty and oversell the last units.
+        variant = db.session.get(ProductVariant, variant_id, with_for_update=True)
         if not variant:
             return jsonify({"error": f"Variant {variant_id} not found"}), 404
         if variant.is_enquiry_only or variant.price_npr is None:

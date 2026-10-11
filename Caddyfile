@@ -1,0 +1,10 @@
+# Caddy gets and renews a Let's Encrypt certificate for API_DOMAIN
+# automatically. HTTPS is required: the Vercel frontend is served over HTTPS,
+# and browsers block its requests to a plain-http API (mixed content).
+{$API_DOMAIN} {
+	encode gzip
+	request_body {
+		max_size 10MB
+	}
+	reverse_proxy api:5000
+}

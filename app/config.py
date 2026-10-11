@@ -4,6 +4,16 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # backen
 DEFAULT_SQLITE_PATH = os.path.join(BASE_DIR, "instance", "app.db")
 
 
+def _normalize_database_url(url: str) -> str:
+    """Point postgres URLs at the psycopg (v3) driver. Hosts commonly hand out
+    `postgres://...`, which SQLAlchemy no longer accepts, and plain
+    `postgresql://` would default to psycopg2, which isn't installed."""
+    for prefix in ("postgres://", "postgresql://"):
+        if url.startswith(prefix):
+            return "postgresql+psycopg://" + url[len(prefix):]
+    return url
+
+
 class Config:
     # 'production' enables a boot-time check (see app/__init__.py) that refuses
     # to start if SECRET_KEY/JWT_SECRET_KEY are still their insecure dev
@@ -26,8 +36,13 @@ class Config:
     # Relative sqlite:/// URIs resolve against the process's CWD, which is
     # fragile (breaks depending on where `flask` is invoked from). Default
     # to an absolute path instead; DATABASE_URL still overrides for Postgres.
-    SQLALCHEMY_DATABASE_URI = os.environ.get("DATABASE_URL", f"sqlite:///{DEFAULT_SQLITE_PATH}")
+    SQLALCHEMY_DATABASE_URI = _normalize_database_url(
+        os.environ.get("DATABASE_URL", f"sqlite:///{DEFAULT_SQLITE_PATH}")
+    )
     SQLALCHEMY_TRACK_MODIFICATIONS = False
+    # Long-lived Postgres connections get dropped (DB restart, idle timeout);
+    # ping before reuse instead of failing the first request after that.
+    SQLALCHEMY_ENGINE_OPTIONS = {"pool_pre_ping": True}
 
     CORS_ORIGINS = [
         origin.strip()

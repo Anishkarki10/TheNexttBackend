@@ -1,4 +1,5 @@
 from app.extensions import db
+from app.models.discount import ProductDiscount, apply_percent_off, utc_now_naive
 
 
 class Product(db.Model):
@@ -29,8 +30,16 @@ class Product(db.Model):
     images = db.relationship(
         "ProductImage", backref="product", cascade="all, delete-orphan", order_by="ProductImage.sort_order"
     )
+    discounts = db.relationship(
+        "ProductDiscount", backref="product", cascade="all, delete-orphan", order_by="ProductDiscount.starts_at"
+    )
+
+    def active_discount(self) -> ProductDiscount | None:
+        now = utc_now_naive()
+        return next((d for d in self.discounts if d.is_active_at(now)), None)
 
     def to_dict(self, detailed: bool = False) -> dict:
+        discount = self.active_discount()
         data = {
             "id": self.id,
             "slug": self.slug,
@@ -41,6 +50,7 @@ class Product(db.Model):
             "is_available": self.is_available,
             "images": [img.to_dict() for img in self.images],
             "variants": [v.to_dict() for v in self.variants],
+            "discount": discount.to_public_dict() if discount else None,
         }
         if detailed:
             data.update(
@@ -69,12 +79,29 @@ class ProductVariant(db.Model):
     stock_qty = db.Column(db.Integer, default=0, nullable=False)
     sort_order = db.Column(db.Integer, default=0, nullable=False)
 
+    def current_price(self):
+        """(price to charge now, active discount or None). The discount is
+        None when there's no list price to take it off."""
+        if self.price_npr is None:
+            return None, None
+        discount = self.product.active_discount() if self.product else None
+        if discount is None:
+            return self.price_npr, None
+        discounted = apply_percent_off(self.price_npr, discount.percent)
+        if discounted >= self.price_npr:
+            # Rounding to whole rupees ate the whole discount (e.g. 0.5% off NPR 100).
+            return self.price_npr, None
+        return discounted, discount
+
     def to_dict(self) -> dict:
+        price, discount = self.current_price()
         return {
             "id": self.id,
             "label": self.label,
             "pack_size": self.pack_size,
             "price_npr": float(self.price_npr) if self.price_npr is not None else None,
+            # Only set while a discount is active; price_npr stays the list price.
+            "discounted_price_npr": float(price) if discount else None,
             "is_enquiry_only": self.is_enquiry_only,
             "stock_qty": self.stock_qty,
             "sort_order": self.sort_order,

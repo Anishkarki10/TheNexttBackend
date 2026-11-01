@@ -8,7 +8,7 @@ Flask API backend for "The Next Protein" (TNP), a small e-commerce store in Nepa
 
 Production runs on a Contabo VPS. Two containers run under `docker compose`: Postgres (`db`) and gunicorn (`api`, published only on `127.0.0.1:5000`). nginx is installed on the host and handles HTTPS through certbot (`deploy/nginx.conf`). `docker-entrypoint.sh` runs `flask db upgrade` and `seed-admin` on every container start. Server settings go in `.env` (see `.env.example`). The full server walkthrough, including backups (`deploy/backup.sh`), is in `deploy/README.md`.
 
-There is no test suite and no linter/formatter config in the repo.
+Tests use pytest and live in `tests/` (install with `pip install -r requirements-dev.txt`). There is no linter/formatter config. `tests/conftest.py` builds the app on an in-memory SQLite database with rate limiting off, and provides `auth` (admin headers), `make_product` and `make_discount` fixtures. The eSewa and Stripe network calls are monkeypatched. `test_app.py` runs every migration and then `flask db check`, so it fails if a model change has no migration.
 
 ## Commands
 
@@ -21,6 +21,9 @@ flask --app wsgi db migrate -m "msg"   # autogenerate a migration after model ch
 flask --app wsgi seed-admin            # create/update admin; uses ADMIN_EMAIL/ADMIN_PASSWORD env or --email/--password
 flask --app wsgi seed-products         # insert the Protein Loaf product (idempotent)
 python wsgi.py                         # dev server on :5000 (debug on unless APP_ENV=production)
+pytest                                 # full test suite (~10s)
+pytest tests/test_orders.py -k delivery   # single file / matching tests
+pytest --cov=app --cov-report=term-missing
 ```
 
 Deploy / update on the server:
@@ -44,6 +47,7 @@ docker compose exec db psql -U "$POSTGRES_USER" "$POSTGRES_DB"
 
 **Order/stock lifecycle** (spread across several files):
 - `orders.py::create_order` locks each variant row (`with_for_update`) and decrements `ProductVariant.stock_qty` right away to reserve stock. Prices always come from the server-side variant, never from the client. `OrderItem` stores snapshots of the product name, variant label, and price, and its FKs are nullable so editing or deleting variants doesn't break past orders.
+- **Discounts** (`models/discount.py`, `api/admin_discounts.py`): a `ProductDiscount` takes a percent off every priced variant of one product between `starts_at` and an optional `ends_at`. The admin API refuses overlapping windows on the same product, so at most one discount is active at a time. Nothing has to run when a discount starts or ends, because `ProductVariant.current_price()` checks the time on every request. Use it wherever a price is charged; checkout does, and `OrderItem.discount_percent` stores the discount that applied. In the public API, `price_npr` is always the list price and `discounted_price_npr` is set only while a discount is active.
 - COD orders go straight to `processing`. Online-payment orders start in `pending_payment`.
 - No cron or task queue exists. Instead, `services/order_maintenance.py::release_stale_pending_orders()` runs at the start of stock-sensitive endpoints (order creation, payment initiation). It cancels `pending_payment` orders older than 30 minutes and gives their stock back. Call it from any new endpoint that depends on stock.
 - `ENABLED_PAYMENT_METHODS` (env, default `cod`) is the only switch for payment methods. Order creation checks it, and so does each payment `initiate` endpoint. eSewa (`services/esewa.py`) and Stripe (`services/stripe_gateway.py`) are fully built but turned off. Their callback endpoints verify the payment with the gateway and are idempotent (`_mark_paid` never downgrades an order that's already paid).

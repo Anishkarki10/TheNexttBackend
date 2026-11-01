@@ -1,5 +1,6 @@
 import re
 import uuid
+from decimal import Decimal
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -40,6 +41,7 @@ def create_order():
     customer = body.get("customer") or {}
     items = body.get("items") or []
     payment_method = body.get("payment_method")
+    delivery_zone = body.get("delivery_zone")
 
     errors = {}
     if not customer.get("name"):
@@ -52,6 +54,9 @@ def create_order():
         errors["customer.address"] = "Shipping address is required"
     if not items:
         errors["items"] = "At least one item is required"
+    delivery_charges = current_app.config["DELIVERY_CHARGES_NPR"]
+    if delivery_zone not in delivery_charges:
+        errors["delivery_zone"] = f"Must be one of {sorted(delivery_charges)}"
     enabled_methods = current_app.config["ENABLED_PAYMENT_METHODS"]
     if payment_method not in ALL_PAYMENT_METHODS:
         errors["payment_method"] = f"Must be one of {sorted(ALL_PAYMENT_METHODS)}"
@@ -92,8 +97,9 @@ def create_order():
             db.session.rollback()
             return jsonify({"error": f"Not enough stock for '{variant.label}' (have {variant.stock_qty})"}), 409
 
-        # Prices always come from the server-side variant record, never the client.
-        unit_price = variant.price_npr
+        # Prices always come from the server-side variant record (with any
+        # discount active right now applied), never the client.
+        unit_price, discount = variant.current_price()
         line_total = unit_price * quantity
         subtotal += line_total
 
@@ -105,11 +111,13 @@ def create_order():
                 product_name_snapshot=variant.product.name,
                 variant_label_snapshot=variant.label,
                 unit_price_npr=unit_price,
+                discount_percent=discount.percent if discount else None,
                 quantity=quantity,
                 line_total_npr=line_total,
             )
         )
 
+    delivery_charge = Decimal(delivery_charges[delivery_zone])
     order = Order(
         order_number=_generate_order_number(),
         customer_name=customer["name"],
@@ -119,8 +127,10 @@ def create_order():
         city=customer.get("city"),
         notes=body.get("notes"),
         payment_method=payment_method,
+        delivery_zone=delivery_zone,
+        delivery_charge_npr=delivery_charge,
         subtotal_npr=subtotal,
-        total_npr=subtotal,  # no shipping/tax modeled yet
+        total_npr=subtotal + delivery_charge,  # no tax modeled yet
         items=order_items,
     )
     if payment_method == "cod":

@@ -1,4 +1,5 @@
 from app.models.product import Product, ProductVariant, ProductImage
+from app.models.discount import ProductDiscount
 from app.models.order import Order, OrderItem, OrderStatus, PaymentStatus
 from app.models.admin_user import AdminUser
 from app.models.enquiry import Enquiry, EnquiryStatus
@@ -9,6 +10,7 @@ __all__ = [
     "Product",
     "ProductVariant",
     "ProductImage",
+    "ProductDiscount",
     "Order",
     "OrderItem",
     "OrderStatus",

@@ -72,6 +72,11 @@ class Config:
         if m.strip()
     }
 
+    # Flat delivery charge per order by zone (Kathmandu Valley vs the rest of
+    # Nepal). Added to the order total server-side; the storefront checkout
+    # (src/pages/Checkout.tsx DELIVERY_ZONES) shows the same amounts.
+    DELIVERY_CHARGES_NPR = {"inside_valley": 100, "outside_valley": 170}
+
     ESEWA_MERCHANT_CODE = os.environ.get("ESEWA_MERCHANT_CODE", "EPAYTEST")
     ESEWA_SECRET_KEY = os.environ.get("ESEWA_SECRET_KEY", "8gBm/:&EnhH.1/q")
     ESEWA_INITIATE_URL = os.environ.get(

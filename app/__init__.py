@@ -75,6 +75,7 @@ def create_app(config_class: type = Config) -> Flask:
         admin_audit_log,
         admin_auth,
         admin_dashboard,
+        admin_discounts,
         admin_enquiries,
         admin_orders,
         admin_products,
@@ -91,6 +92,7 @@ def create_app(config_class: type = Config) -> Flask:
     app.register_blueprint(admin_auth.bp)
     app.register_blueprint(admin_products.bp)
     app.register_blueprint(admin_products.uploads_bp)
+    app.register_blueprint(admin_discounts.bp)
     app.register_blueprint(admin_orders.bp)
     app.register_blueprint(admin_dashboard.bp)
     app.register_blueprint(admin_enquiries.bp)

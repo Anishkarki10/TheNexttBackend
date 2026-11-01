@@ -37,7 +37,10 @@ class Order(db.Model):
     gateway_reference = db.Column(db.String(120))  # transaction_uuid (esewa) / checkout session id (stripe)
     gateway_txn_id = db.Column(db.String(120))  # ref_id (esewa) / payment_intent id (stripe), set once verified
 
-    subtotal_npr = db.Column(db.Numeric(10, 2), nullable=False)
+    delivery_zone = db.Column(db.String(20))  # 'inside_valley' | 'outside_valley'; null on orders before zones existed
+    delivery_charge_npr = db.Column(db.Numeric(10, 2), nullable=False, default=0, server_default="0")
+
+    subtotal_npr = db.Column(db.Numeric(10, 2), nullable=False)  # items only
     total_npr = db.Column(db.Numeric(10, 2), nullable=False)
 
     created_at = db.Column(db.DateTime, server_default=db.func.now())
@@ -58,6 +61,8 @@ class Order(db.Model):
             "status": self.status.value,
             "payment_method": self.payment_method,
             "payment_status": self.payment_status.value,
+            "delivery_zone": self.delivery_zone,
+            "delivery_charge_npr": float(self.delivery_charge_npr or 0),
             "subtotal_npr": float(self.subtotal_npr),
             "total_npr": float(self.total_npr),
             "created_at": to_utc_iso(self.created_at),
@@ -76,7 +81,8 @@ class OrderItem(db.Model):
 
     product_name_snapshot = db.Column(db.String(200), nullable=False)
     variant_label_snapshot = db.Column(db.String(60))
-    unit_price_npr = db.Column(db.Numeric(10, 2), nullable=False)
+    unit_price_npr = db.Column(db.Numeric(10, 2), nullable=False)  # what was charged, after any discount
+    discount_percent = db.Column(db.Numeric(5, 2), nullable=True)  # snapshot; null = sold at list price
     quantity = db.Column(db.Integer, nullable=False)
     line_total_npr = db.Column(db.Numeric(10, 2), nullable=False)
 
@@ -88,6 +94,7 @@ class OrderItem(db.Model):
             "product_name": self.product_name_snapshot,
             "variant_label": self.variant_label_snapshot,
             "unit_price_npr": float(self.unit_price_npr),
+            "discount_percent": float(self.discount_percent) if self.discount_percent is not None else None,
             "quantity": self.quantity,
             "line_total_npr": float(self.line_total_npr),
         }
